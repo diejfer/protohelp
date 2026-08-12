@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "protohelp-default-components",
+  "name": "Componentes estándar de Protohelp",
+  "version": "1.0.0",
+  "kind": "components",
+  "items": [
+    { "id": "led-5mm", "name": "LED 5 mm", "label": "LED", "w": 2, "h": 2, "bodyOffsetX": 0, "bodyOffsetY": 0, "color": "#ef4444", "pins": [[0,1],[2,1]], "pinLabels": ["A","K"], "pinColors": ["#ef4444","#475569"] },
+    { "id": "resistor-axial", "name": "Resistencia axial", "label": "R · 220 Ω", "w": 5, "h": 1, "bodyOffsetX": 0, "bodyOffsetY": -0.5, "color": "#d6a86e", "pins": [[0,0],[5,0]], "pinLabels": ["1","2"], "pinColors": ["#64748b","#64748b"] },
+    { "id": "dip-8", "name": "Circuito integrado DIP-8", "label": "DIP-8", "w": 4, "h": 4, "bodyOffsetX": 0, "bodyOffsetY": 0, "color": "#334155", "pins": [[0,0],[0,1],[0,2],[0,3],[4,3],[4,2],[4,1],[4,0]], "pinLabels": ["1","2","3","4","5","6","7","8"], "pinColors": ["#94a3b8","#94a3b8","#94a3b8","#94a3b8","#94a3b8","#94a3b8","#94a3b8","#94a3b8"] },
+    { "id": "pushbutton", "name": "Pulsador táctil", "label": "SW", "w": 3, "h": 3, "bodyOffsetX": 0, "bodyOffsetY": 0, "color": "#64748b", "pins": [[0,0],[0,3],[3,0],[3,3]], "pinLabels": ["1A","1B","2A","2B"], "pinColors": ["#64748b","#64748b","#64748b","#64748b"] },
+    { "id": "capacitor", "name": "Capacitor radial", "label": "C", "w": 2, "h": 2, "bodyOffsetX": 0, "bodyOffsetY": 0, "color": "#2563eb", "pins": [[0,1],[2,1]], "pinLabels": ["+","−"], "pinColors": ["#ef4444","#475569"] },
+    { "id": "esp32-devkit-v1-30p", "name": "ESP32 DevKit V1 · 30 pines", "label": "ESP32 DevKit V1", "w": 10, "h": 18, "bodyOffsetX": 0, "bodyOffsetY": 0, "color": "#0f766e", "pins": [[0,2],[0,3],[0,4],[0,5],[0,6],[0,7],[0,8],[0,9],[0,10],[0,11],[0,12],[0,13],[0,14],[0,15],[0,16],[10,16],[10,15],[10,14],[10,13],[10,12],[10,11],[10,10],[10,9],[10,8],[10,7],[10,6],[10,5],[10,4],[10,3],[10,2]], "pinLabels": ["EN","VP","VN","D34","D35","D32","D33","D25","D26","D27","D14","D12","D13","GND","VIN","D23","D22","TX0","RX0","D21","D19","D18","D5","TX2","RX2","D4","D2","D15","GND","3V3"], "pinColors": ["#f59e0b","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#475569","#ef4444","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#22c55e","#475569","#ef4444"] },
+    { "id": "pololu-a5984", "name": "Pololu A5984 · driver paso a paso", "label": "A5984", "w": 6, "h": 8, "bodyOffsetX": -0.5, "bodyOffsetY": -0.5, "color": "#2563eb", "pins": [[0,0],[0,1],[0,2],[0,3],[0,4],[0,5],[0,6],[0,7],[5,7],[5,6],[5,5],[5,4],[5,3],[5,2],[5,1],[5,0],[3,0]], "pinLabels": ["EN","MS1","MS2","MS3","RST","SLP","STEP","DIR","VMOT","GND","2B","2A","1A","1B","VDD","GND","FAULT"], "pinColors": ["#22c55e","#a855f7","#a855f7","#a855f7","#f59e0b","#f59e0b","#22c55e","#22c55e","#ef4444","#475569","#f97316","#f97316","#f97316","#f97316","#ef4444","#475569","#eab308"] }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "protohelp-default-boards",
+  "name": "Protoboards estándar de Protohelp",
+  "version": "1.0.0",
+  "kind": "boards",
+  "items": [
+    { "id": "breadboard-830", "name": "Estándar 830 puntos", "cols": 63, "railCols": 50, "railMargin": 2, "hasRails": true, "color": "#f7f3e9" },
+    { "id": "breadboard-400", "name": "Compacta 400 puntos", "cols": 30, "railCols": 25, "railMargin": 0, "hasRails": true, "color": "#f7f3e9" },
+    { "id": "breadboard-170", "name": "Mini 170 puntos · sin alimentación", "cols": 17, "railCols": 0, "railMargin": 0, "hasRails": false, "color": "#f7f3e9" }
+  ]
+}

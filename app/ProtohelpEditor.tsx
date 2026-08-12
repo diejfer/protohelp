@@ -1,6 +1,9 @@
 "use client";
 
 import { PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
+import defaultBoardsJson from "../src/libraries/default-boards.json";
+import defaultComponentsJson from "../src/libraries/default-components.json";
+import type { BoardDefinition, BoardLibraryManifest, ComponentDefinition, ComponentLibraryManifest, LibraryKind, LibraryManifest } from "../src/libraries/types";
 
 const GRID = 18;
 const MAIN_ROWS = [4, 5, 6, 7, 8, 11, 12, 13, 14, 15];
@@ -15,37 +18,52 @@ const WIRE_COLORS = ["#ef4444", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed"];
 
 type Point = [number, number];
 type Board = { id: string; modelId: string; label: string; x: number; y: number; cols: number; railCols: number; railMargin: number; hasRails: boolean; rotation: number; color: string };
-type Part = { id: string; modelId: string; label: string; x: number; y: number; w: number; h: number; bodyOffsetX: number; bodyOffsetY: number; rotation: number; color: string; pins: Point[] };
+type Part = { id: string; modelId: string; label: string; x: number; y: number; w: number; h: number; bodyOffsetX: number; bodyOffsetY: number; rotation: number; color: string; pins: Point[]; pinLabels: string[]; pinColors: string[] };
 type Endpoint = { boardId: string; col: number; row: number };
 type Wire = { id: string; from: Endpoint; to: Endpoint; color: string; points: Point[] };
 type Project = { name: string; pitchX: number; pitchY: number; slackPercent: number; slackMm: number; boards: Board[]; parts: Part[]; wires: Wire[] };
 type Selection = { kind: "board" | "part" | "wire"; id: string } | null;
 type Drag = { kind: "board" | "part"; id: string; dx: number; dy: number } | { kind: "wirePoint"; id: string; index: number };
-type LibraryKind = "components" | "boards";
-type ExternalLibrary = { id: string; kind: LibraryKind; name: string; source: string; enabled: boolean; items: number };
+type ExternalLibrary = { id: string; kind: LibraryKind; name: string; source: string; enabled: boolean; items: number; manifest?: LibraryManifest };
 type SchematicPin = { key: string; partId: string; partLabel: string; pinIndex: number; connected: boolean };
 type SchematicNet = { id: string; pins: SchematicPin[] };
 
-const BOARD_LIBRARY = [
-  { id: "breadboard-830", name: "Estándar 830 puntos", cols: 63, railCols: 50, railMargin: 2, hasRails: true, color: "#f7f3e9" },
-  { id: "breadboard-400", name: "Compacta 400 puntos", cols: 30, railCols: 25, railMargin: 0, hasRails: true, color: "#f7f3e9" },
-  { id: "breadboard-170", name: "Mini 170 puntos · sin alimentación", cols: 17, railCols: 0, railMargin: 0, hasRails: false, color: "#f7f3e9" },
-];
+const DEFAULT_BOARD_LIBRARY = defaultBoardsJson as BoardLibraryManifest;
+const DEFAULT_COMPONENT_LIBRARY = defaultComponentsJson as ComponentLibraryManifest;
+const BOARD_LIBRARY: BoardDefinition[] = DEFAULT_BOARD_LIBRARY.items;
 function boardFromModel(modelId: string, id: string, x: number, y: number): Board {
   const model = BOARD_LIBRARY.find(item => item.id === modelId) ?? BOARD_LIBRARY[0];
   return { id, modelId: model.id, label: model.name, x, y, cols: model.cols, railCols: model.railCols, railMargin: model.railMargin, hasRails: model.hasRails, rotation: 0, color: model.color };
 }
 const standardBoard: Board = boardFromModel("breadboard-830", "board-1", 5, 5);
-const COMPONENT_LIBRARY = [
-  { id: "led-5mm", name: "LED 5 mm", label: "LED", w: 2, h: 2, bodyOffsetX: 0, bodyOffsetY: 0, color: "#ef4444", pins: [[0, 1], [2, 1]] as Point[] },
-  { id: "resistor-axial", name: "Resistencia axial", label: "R · 220 Ω", w: 5, h: 1, bodyOffsetX: 0, bodyOffsetY: -.5, color: "#d6a86e", pins: [[0, 0], [5, 0]] as Point[] },
-  { id: "dip-8", name: "Circuito integrado DIP-8", label: "DIP-8", w: 4, h: 4, bodyOffsetX: 0, bodyOffsetY: 0, color: "#334155", pins: [[0, 0], [0, 1], [0, 2], [0, 3], [4, 0], [4, 1], [4, 2], [4, 3]] as Point[] },
-  { id: "pushbutton", name: "Pulsador táctil", label: "SW", w: 3, h: 3, bodyOffsetX: 0, bodyOffsetY: 0, color: "#64748b", pins: [[0, 0], [0, 3], [3, 0], [3, 3]] as Point[] },
-  { id: "capacitor", name: "Capacitor radial", label: "C", w: 2, h: 2, bodyOffsetX: 0, bodyOffsetY: 0, color: "#2563eb", pins: [[0, 1], [2, 1]] as Point[] },
-];
+const COMPONENT_LIBRARY: ComponentDefinition[] = DEFAULT_COMPONENT_LIBRARY.items;
+function isLibraryManifest(value: unknown): value is LibraryManifest {
+  if (!value || typeof value !== "object") return false;
+  const manifest = value as Partial<LibraryManifest>;
+  if (manifest.schemaVersion !== 1 || !manifest.id || !manifest.name || !manifest.version || !Array.isArray(manifest.items)) return false;
+  if (manifest.kind === "components") return manifest.items.every(item => {
+    const component = item as ComponentDefinition;
+    return Boolean(component.id && component.name && Number.isFinite(component.w) && Number.isFinite(component.h) && Array.isArray(component.pins) && component.pins.length === component.pinLabels?.length && component.pins.length === component.pinColors?.length);
+  });
+  if (manifest.kind === "boards") return manifest.items.every(item => {
+    const board = item as BoardDefinition;
+    return Boolean(board.id && board.name && Number.isInteger(board.cols) && board.cols > 0 && typeof board.hasRails === "boolean");
+  });
+  return false;
+}
+function readExternalLibraries(): ExternalLibrary[] {
+  if (typeof window === "undefined") return [];
+  try { const value = JSON.parse(localStorage.getItem(LIBRARY_STORAGE_KEY) ?? "[]"); return Array.isArray(value) ? value : []; } catch { return []; }
+}
+function availableBoardModels(): BoardDefinition[] {
+  return [...BOARD_LIBRARY, ...readExternalLibraries().filter(library => library.enabled && library.manifest?.kind === "boards").flatMap(library => (library.manifest as BoardLibraryManifest).items)];
+}
+function availableComponentModels(): ComponentDefinition[] {
+  return [...COMPONENT_LIBRARY, ...readExternalLibraries().filter(library => library.enabled && library.manifest?.kind === "components").flatMap(library => (library.manifest as ComponentLibraryManifest).items)];
+}
 function componentFromModel(modelId: string, id: string, x: number, y: number): Part {
   const model = COMPONENT_LIBRARY.find(item => item.id === modelId) ?? COMPONENT_LIBRARY[0];
-  return { id, modelId: model.id, label: model.label, x, y, w: model.w, h: model.h, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, rotation: 0, color: model.color, pins: model.pins };
+  return { id, modelId: model.id, label: model.label, x, y, w: model.w, h: model.h, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, rotation: 0, color: model.color, pins: model.pins, pinLabels: model.pinLabels, pinColors: model.pinColors };
 }
 const initialProject: Project = {
   name: "Mi primer circuito", pitchX: 2.54, pitchY: 2.54, slackPercent: 5, slackMm: 0,
@@ -71,7 +89,7 @@ function endpointPoint(project: Project, endpoint: Endpoint): Point {
   if (!board) return [0, 0];
   return rotatePoint([board.x + 1 + endpoint.col, board.y + 1 + endpoint.row], [board.x + (board.cols + 1) / 2, board.y + boardHeight(board) / 2], board.rotation);
 }
-function boardHasRails(board: Board): boolean { return board.modelId !== "breadboard-170"; }
+function boardHasRails(board: Board): boolean { return board.hasRails; }
 function boardHeight(board: Board): number { return boardHasRails(board) ? BOARD_HEIGHT : MINI_BOARD_HEIGHT; }
 function mainRows(board: Board): number[] { return boardHasRails(board) ? MAIN_ROWS : MINI_MAIN_ROWS; }
 function wireRoute(wire: Wire, project: Project): Point[] { return [endpointPoint(project, wire.from), ...wire.points, endpointPoint(project, wire.to)]; }
@@ -144,12 +162,14 @@ function deriveSchematic(project: Project): SchematicNet[] {
   return [...grouped.entries()].map(([id, pins]) => ({ id, pins: pins.map(pin => ({ ...pin, connected: pins.length > 1 })) }));
 }
 function normalizeProject(value: Partial<Project>): Project {
+  const boards = availableBoardModels();
+  const components = availableComponentModels();
   if (value.boards?.length) return { ...initialProject, ...value, boards: value.boards.map(board => {
-    const model = BOARD_LIBRARY.find(item => item.id === board.modelId) ?? BOARD_LIBRARY.find(item => board.label.includes(item.cols === 63 ? "830" : "400")) ?? (board.cols <= 30 ? BOARD_LIBRARY[1] : BOARD_LIBRARY[0]);
+    const model = boards.find(item => item.id === board.modelId) ?? BOARD_LIBRARY.find(item => board.label.includes(item.cols === 63 ? "830" : "400")) ?? (board.cols <= 30 ? BOARD_LIBRARY[1] : BOARD_LIBRARY[0]);
     return { ...board, modelId: model.id, label: model.name, cols: model.cols, railCols: model.railCols, railMargin: model.railMargin, hasRails: model.hasRails };
   }), parts: (value.parts ?? []).map(part => {
-    const model = COMPONENT_LIBRARY.find(item => item.id === part.modelId) ?? COMPONENT_LIBRARY.find(item => item.w === part.w && item.h === part.h) ?? COMPONENT_LIBRARY[0];
-    return { ...part, modelId: model.id, bodyOffsetX: part.bodyOffsetX ?? model.bodyOffsetX, bodyOffsetY: part.bodyOffsetY ?? model.bodyOffsetY, pins: model.pins };
+    const model = components.find(item => item.id === part.modelId) ?? COMPONENT_LIBRARY.find(item => item.w === part.w && item.h === part.h) ?? COMPONENT_LIBRARY[0];
+    return { ...part, modelId: model.id, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, pins: model.pins, pinLabels: model.pinLabels, pinColors: model.pinColors };
   }) } as Project;
   const legacyWires = (value as unknown as { wires?: Array<{ id: string; from: Point; to: Point; color: string; points: Point[] }> }).wires;
   return {
@@ -159,7 +179,7 @@ function normalizeProject(value: Partial<Project>): Project {
     pitchY: value.pitchY ?? initialProject.pitchY,
     slackPercent: value.slackPercent ?? initialProject.slackPercent,
     slackMm: value.slackMm ?? initialProject.slackMm,
-    parts: (value.parts ?? initialProject.parts).map(part => { const model = COMPONENT_LIBRARY.find(item => item.w === part.w && item.h === part.h) ?? COMPONENT_LIBRARY[0]; return { ...part, modelId: model.id, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, pins: model.pins, x: part.x + 5, y: part.y + 5 }; }),
+    parts: (value.parts ?? initialProject.parts).map(part => { const model = COMPONENT_LIBRARY.find(item => item.w === part.w && item.h === part.h) ?? COMPONENT_LIBRARY[0]; return { ...part, modelId: model.id, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, pins: model.pins, pinLabels: model.pinLabels, pinColors: model.pinColors, x: part.x + 5, y: part.y + 5 }; }),
     wires: (legacyWires ?? []).map(wire => ({
       id: wire.id,
       from: { boardId: standardBoard.id, col: Math.max(0, wire.from[0] - 1), row: wire.from[1] },
@@ -197,6 +217,9 @@ export function ProtohelpEditor() {
 
   const total = useMemo(() => project.wires.reduce((sum, wire) => sum + wireLength(wire, project).cut, 0), [project]);
   const schematicNets = useMemo(() => deriveSchematic(project), [project]);
+  const enabledManifests = readExternalLibraries().filter(library => library.enabled && library.manifest).map(library => library.manifest!);
+  const boardModels = [...BOARD_LIBRARY, ...enabledManifests.filter((manifest): manifest is BoardLibraryManifest => manifest.kind === "boards").flatMap(manifest => manifest.items)];
+  const componentModels = [...COMPONENT_LIBRARY, ...enabledManifests.filter((manifest): manifest is ComponentLibraryManifest => manifest.kind === "components").flatMap(manifest => manifest.items)];
   const selectedBoard = selection?.kind === "board" ? project.boards.find(item => item.id === selection.id) : undefined;
   const selectedPart = selection?.kind === "part" ? project.parts.find(item => item.id === selection.id) : undefined;
   const selectedWire = selection?.kind === "wire" ? project.wires.find(item => item.id === selection.id) : undefined;
@@ -240,7 +263,7 @@ export function ProtohelpEditor() {
     setProject(current => ({ ...current, boards: [...current.boards, board] })); setSelection({ kind: "board", id: board.id }); setTool("select");
   }
   function changeBoardModel(boardId: string, modelId: string) {
-    const model = BOARD_LIBRARY.find(item => item.id === modelId);
+    const model = boardModels.find(item => item.id === modelId);
     if (!model) return;
     setProject(current => ({ ...current, boards: current.boards.map(board => board.id === boardId ? { ...board, modelId: model.id, label: model.name, cols: model.cols, railCols: model.railCols, railMargin: model.railMargin, hasRails: model.hasRails, color: model.color } : board) }));
   }
@@ -249,9 +272,9 @@ export function ProtohelpEditor() {
     setProject(current => ({ ...current, parts: [...current.parts, part] })); setSelection({ kind: "part", id: part.id }); setTool("select");
   }
   function changePartModel(partId: string, modelId: string) {
-    const model = COMPONENT_LIBRARY.find(item => item.id === modelId);
+    const model = componentModels.find(item => item.id === modelId);
     if (!model) return;
-    setProject(current => ({ ...current, parts: current.parts.map(part => part.id === partId ? { ...part, modelId: model.id, label: model.label, w: model.w, h: model.h, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, color: model.color, pins: model.pins } : part) }));
+    setProject(current => ({ ...current, parts: current.parts.map(part => part.id === partId ? { ...part, modelId: model.id, label: model.label, w: model.w, h: model.h, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, color: model.color, pins: model.pins, pinLabels: model.pinLabels, pinColors: model.pinColors } : part) }));
   }
   function rotateSelected() {
     if (!selection || selection.kind === "wire") return;
@@ -324,7 +347,7 @@ export function ProtohelpEditor() {
                 {!hasRails && <g className="mounting-points"><circle cx={x + GRID * .65} cy={y + height / 2} r={GRID * .34} /><circle cx={x + width - GRID * .65} cy={y + height / 2} r={GRID * .34} /></g>}
               </g>;
             })}</g>
-            <g className="component-layer">{project.parts.map(part => { const anchorX = part.x * GRID, anchorY = part.y * GRID, bodyX = anchorX + part.bodyOffsetX * GRID, bodyY = anchorY + part.bodyOffsetY * GRID, centerX = bodyX + part.w * GRID / 2, centerY = bodyY + part.h * GRID / 2; return <g key={part.id} transform={`rotate(${part.rotation} ${anchorX} ${anchorY})`} onPointerDown={event => beginMove(event, "part", part)} className="part"><rect x={bodyX} y={bodyY} width={part.w * GRID} height={part.h * GRID} rx="5" fill={part.color} fillOpacity=".72" stroke={selection?.kind === "part" && selection.id === part.id ? "#111" : "#5e6866"} strokeWidth={selection?.kind === "part" && selection.id === part.id ? 2.5 : 1.5} /><text x={centerX} y={centerY + 4} textAnchor="middle">{part.label}</text>{part.pins.map((pin, index) => <circle key={index} cx={anchorX + pin[0] * GRID} cy={anchorY + pin[1] * GRID} r="4" className="pin" />)}</g>; })}</g>
+            <g className="component-layer">{project.parts.map(part => { const anchorX = part.x * GRID, anchorY = part.y * GRID, bodyX = anchorX + part.bodyOffsetX * GRID, bodyY = anchorY + part.bodyOffsetY * GRID, centerX = bodyX + part.w * GRID / 2, centerY = bodyY + part.h * GRID / 2; return <g key={part.id} transform={`rotate(${part.rotation} ${anchorX} ${anchorY})`} onPointerDown={event => beginMove(event, "part", part)} className={`part ${part.pins.length > 20 ? "dense-pins" : ""}`}><rect x={bodyX} y={bodyY} width={part.w * GRID} height={part.h * GRID} rx="5" fill={part.color} fillOpacity=".72" stroke={selection?.kind === "part" && selection.id === part.id ? "#111" : "#5e6866"} strokeWidth={selection?.kind === "part" && selection.id === part.id ? 2.5 : 1.5} /><text x={centerX} y={centerY + 4} textAnchor="middle">{part.label}</text>{part.pins.map((pin, index) => <g key={index}><circle cx={anchorX + pin[0] * GRID} cy={anchorY + pin[1] * GRID} r="4" className="pin" style={{ fill: part.pinColors[index] ?? "#f8faf9" }}><title>{part.pinLabels[index] ?? `Pin ${index + 1}`}</title></circle>{part.pins.length > 8 && <text className="physical-pin-label" x={anchorX + pin[0] * GRID + (pin[0] <= part.w / 2 ? 9 : -9)} y={anchorY + pin[1] * GRID + 3} textAnchor={pin[0] <= part.w / 2 ? "start" : "end"}>{part.pinLabels[index]}</text>}</g>)}</g>; })}</g>
             <g className="wire-layer">{project.wires.map(wire => { const route = wireRoute(wire, project); const points = route.map(point => `${point[0] * GRID},${point[1] * GRID}`).join(" "); const selected = selection?.kind === "wire" && selection.id === wire.id; return <g key={wire.id}><polyline className="wire-hit" points={points} onPointerDown={event => { event.stopPropagation(); setSelection({ kind: "wire", id: wire.id }); setTool("select"); }} /><polyline className={selected ? "wire selected" : "wire"} points={points} stroke={wire.color} />{selected && wire.points.map((point, index) => <circle key={index} className="route-handle" cx={point[0] * GRID} cy={point[1] * GRID} r="6" onPointerDown={event => { event.stopPropagation(); setDrag({ kind: "wirePoint", id: wire.id, index }); }} />)}</g>; })}</g>
           </g>
         </svg> : <SchematicCanvas project={project} nets={schematicNets} zoom={zoom} />}
@@ -336,8 +359,8 @@ export function ProtohelpEditor() {
         <section className="add-panel"><div className="section-title"><span>Agregar al diseño</span></div><div className="action-grid"><button onClick={() => addBoard()}><b>▦</b>Protoboard</button><button onClick={addPart}><b>◇</b>Componente</button><button onClick={() => { setTool("wire"); setPendingEndpoint(null); }}><b>⌁</b>Puente</button></div></section>
         <section className="selection-panel"><div className="section-title"><span>Selección</span><small>{selection ? selection.kind === "board" ? "Protoboard" : selection.kind === "part" ? "Componente" : "Puente" : "Nada seleccionado"}</small></div>
           {!selection && <p className="empty-copy">Seleccioná un elemento en el lienzo para moverlo, rotarlo o eliminarlo.</p>}
-          {selectedBoard && <><label>Modelo<select value={selectedBoard.modelId} onChange={event => changeBoardModel(selectedBoard.id, event.target.value)}>{BOARD_LIBRARY.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><div className="component-meta"><span>{selectedBoard.cols * 10 + selectedBoard.railCols * 4} puntos</span><span>{selectedBoard.cols} columnas centrales</span><span>{boardHasRails(selectedBoard) ? `4 rieles × ${selectedBoard.railCols}` : "Sin rieles de alimentación"}</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
-          {selectedPart && <><label>Componente de la biblioteca<select value={selectedPart.modelId} onChange={event => changePartModel(selectedPart.id, event.target.value)}>{COMPONENT_LIBRARY.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><label className="spaced-field">Etiqueta de esta instancia<input value={selectedPart.label} onChange={event => setProject(current => ({ ...current, parts: current.parts.map(part => part.id === selectedPart.id ? { ...part, label: event.target.value } : part) }))} /></label><div className="component-meta"><span>{selectedPart.w} × {selectedPart.h} pitches</span><span>{selectedPart.pins.length} pines</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
+          {selectedBoard && <><label>Modelo<select value={selectedBoard.modelId} onChange={event => changeBoardModel(selectedBoard.id, event.target.value)}>{boardModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><div className="component-meta"><span>{selectedBoard.cols * 10 + selectedBoard.railCols * 4} puntos</span><span>{selectedBoard.cols} columnas centrales</span><span>{boardHasRails(selectedBoard) ? `4 rieles × ${selectedBoard.railCols}` : "Sin rieles de alimentación"}</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
+          {selectedPart && <><label>Componente de la biblioteca<select value={selectedPart.modelId} onChange={event => changePartModel(selectedPart.id, event.target.value)}>{componentModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><label className="spaced-field">Etiqueta de esta instancia<input value={selectedPart.label} onChange={event => setProject(current => ({ ...current, parts: current.parts.map(part => part.id === selectedPart.id ? { ...part, label: event.target.value } : part) }))} /></label><div className="component-meta"><span>{selectedPart.w} × {selectedPart.h} pitches</span><span>{selectedPart.pins.length} pines</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
           {selectedWire && <><label>Color<input className="color-input" type="color" value={selectedWire.color} onChange={event => setProject(current => ({ ...current, wires: current.wires.map(wire => wire.id === selectedWire.id ? { ...wire, color: event.target.value } : wire) }))} /></label><p className="empty-copy">Arrastrá los puntos blancos del puente para ajustar el recorrido.</p><div className="edit-actions"><button onClick={() => routeWire(selectedWire.id)}>⇢ Autorutear</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
         </section>
         <section><div className="section-title"><span>Capas del montaje</span><small>Seleccionables</small></div><button className="layer-row" onClick={() => project.boards[0] && setSelection({ kind: "board", id: project.boards[0].id })}><b>▦</b><span>Protoboards<small>{project.boards.length} elementos</small></span></button><button className="layer-row" onClick={() => project.parts[0] && setSelection({ kind: "part", id: project.parts[0].id })}><b>◇</b><span>Componentes<small>{project.parts.length} elementos</small></span></button><button className="layer-row" onClick={() => project.wires[0] && setSelection({ kind: "wire", id: project.wires[0].id })}><b>⌁</b><span>Puentes<small>{project.wires.length} elementos</small></span></button></section>
@@ -377,7 +400,7 @@ function SchematicCanvas({ project, nets, zoom }: { project: Project; nets: Sche
       {project.parts.map(part => {
         const position = positions.get(part.id)!;
         const partNets = nets.flatMap(net => net.pins).filter(pin => pin.partId === part.id);
-        return <g key={part.id} className="schematic-part"><rect x={position.x} y={position.y} width={boxWidth} height={boxHeight} rx="8" /><text className="schematic-part-name" x={position.x + boxWidth / 2} y={position.y + boxHeight / 2 + 4} textAnchor="middle">{part.label}</text>{partNets.map(pin => { const point = pinPosition(pin); const left = point[0] === position.x; return <g key={pin.key}><circle className={pin.connected ? "schematic-pin" : "schematic-pin unconnected"} cx={point[0]} cy={point[1]} r="5" /><text className="pin-number" x={point[0] + (left ? 10 : -10)} y={point[1] - 7} textAnchor={left ? "start" : "end"}>{pin.pinIndex + 1}</text>{!pin.connected && <path className="unconnected-mark" d={`M ${point[0] + (left ? -13 : 13)} ${point[1] - 4} l 8 8 m 0 -8 l -8 8`} />}</g>; })}</g>;
+        return <g key={part.id} className="schematic-part"><rect x={position.x} y={position.y} width={boxWidth} height={boxHeight} rx="8" /><text className="schematic-part-name" x={position.x + boxWidth / 2} y={position.y + boxHeight / 2 + 4} textAnchor="middle">{part.label}</text>{partNets.map(pin => { const point = pinPosition(pin); const left = point[0] === position.x; return <g key={pin.key}><circle className={pin.connected ? "schematic-pin" : "schematic-pin unconnected"} cx={point[0]} cy={point[1]} r="5" style={{ fill: part.pinColors[pin.pinIndex] ?? undefined }} /><text className="pin-number" x={point[0] + (left ? 10 : -10)} y={point[1] - 7} textAnchor={left ? "start" : "end"}>{part.pinLabels[pin.pinIndex] ?? pin.pinIndex + 1}</text>{!pin.connected && <path className="unconnected-mark" d={`M ${point[0] + (left ? -13 : 13)} ${point[1] - 4} l 8 8 m 0 -8 l -8 8`} />}</g>; })}</g>;
       })}
       {!project.parts.length && <text x="460" y="300" textAnchor="middle" className="schematic-empty">Agregá componentes al montaje para generar el esquema.</text>}
     </g>
@@ -395,18 +418,24 @@ function LibraryManager({ onBack }: { onBack: () => void }) {
     if (saved) try { setLibraries(JSON.parse(saved)); } catch { /* start empty */ }
   }, []);
   function persist(next: ExternalLibrary[]) { setLibraries(next); localStorage.setItem(LIBRARY_STORAGE_KEY, JSON.stringify(next)); }
-  function addUrl() {
+  async function addUrl() {
     const clean = url.trim();
     if (!/^https:\/\//i.test(clean)) { window.alert("Ingresá una URL pública HTTPS válida."); return; }
-    const name = clean.split("/").filter(Boolean).pop()?.replace(/\.json$/i, "") || "Biblioteca externa";
-    persist([...libraries, { id: `library-${Date.now()}`, kind: tab, name, source: clean, enabled: true, items: 0 }]); setUrl("");
+    try {
+      const response = await fetch(clean);
+      if (!response.ok) throw new Error();
+      const manifest: unknown = await response.json();
+      if (!isLibraryManifest(manifest) || manifest.kind !== tab) { window.alert(`La URL no contiene una biblioteca válida de ${tab === "components" ? "componentes" : "protoboards"}.`); return; }
+      persist([...libraries, { id: `library-${Date.now()}`, kind: manifest.kind, name: manifest.name, source: clean, enabled: true, items: manifest.items.length, manifest }]); setUrl("");
+    } catch { window.alert("No se pudo descargar la biblioteca. Verificá la URL y que el servidor permita CORS."); }
   }
   function importLibrary(file?: File) {
     if (!file) return;
-    file.text().then(text => { try { const data = JSON.parse(text); const items = Array.isArray(data) ? data.length : Array.isArray(data.items) ? data.items.length : 0; persist([...libraries, { id: `library-${Date.now()}`, kind: tab, name: data.name || file.name.replace(/\.json$/i, ""), source: file.name, enabled: true, items }]); } catch { window.alert("El archivo no contiene una biblioteca JSON válida."); } });
+    file.text().then(text => { try { const manifest: unknown = JSON.parse(text); if (!isLibraryManifest(manifest) || manifest.kind !== tab) throw new Error(); persist([...libraries, { id: `library-${Date.now()}`, kind: manifest.kind, name: manifest.name, source: file.name, enabled: true, items: manifest.items.length, manifest }]); } catch { window.alert(`El archivo no contiene una biblioteca válida de ${tab === "components" ? "componentes" : "protoboards"}.`); } });
   }
   const external = libraries.filter(library => library.kind === tab);
-  const builtInCount = tab === "components" ? COMPONENT_LIBRARY.length : BOARD_LIBRARY.length;
+  const defaultManifest = tab === "components" ? DEFAULT_COMPONENT_LIBRARY : DEFAULT_BOARD_LIBRARY;
+  const builtInCount = defaultManifest.items.length;
 
   return <main className="library-page">
     <header className="topbar"><button className="back-button" onClick={onBack}>← Volver al editor</button><div className="brand"><span className="brand-mark">P</span><span>protohelp</span></div><div className="library-heading">Bibliotecas</div></header>
@@ -414,9 +443,10 @@ function LibraryManager({ onBack }: { onBack: () => void }) {
       <aside className="library-sidebar"><h2>Bibliotecas</h2><p>Administrá los elementos disponibles en todos tus proyectos.</p><button className={tab === "components" ? "active" : ""} onClick={() => setTab("components")}><b>◇</b><span>Componentes<small>{COMPONENT_LIBRARY.length} incorporados</small></span></button><button className={tab === "boards" ? "active" : ""} onClick={() => setTab("boards")}><b>▦</b><span>Protoboards<small>{BOARD_LIBRARY.length} incorporados</small></span></button></aside>
       <section className="library-content">
         <div className="library-title"><div><span className="eyebrow">Biblioteca de {tab === "components" ? "componentes" : "protoboards"}</span><h1>{tab === "components" ? "Componentes" : "Protoboards"}</h1><p>Elegí qué colecciones estarán disponibles en el editor.</p></div><button className="secondary-button" onClick={() => libraryFile.current?.click()}>Importar JSON</button><input ref={libraryFile} hidden type="file" accept=".json" onChange={event => importLibrary(event.target.files?.[0])} /></div>
+        <div className="library-help"><div><b>¿Querés crear tu propia biblioteca?</b><span>Consultá la guía técnica con el formato, ejemplos y reglas de validación.</span></div><a href={`${import.meta.env.BASE_URL}guides/${tab === "components" ? "components" : "protoboards"}/AGENTS.md`} target="_blank" rel="noreferrer">Abrir guía AGENTS.md ↗</a></div>
         <div className="source-box"><label>Agregar biblioteca desde una URL pública HTTPS</label><div><input value={url} onChange={event => setUrl(event.target.value)} onKeyDown={event => event.key === "Enter" && addUrl()} placeholder="https://ejemplo.com/biblioteca.json" /><button onClick={addUrl}>Agregar biblioteca</button></div><small>La colección se guardará en este navegador. Solo se aceptan definiciones JSON.</small></div>
         <div className="collection-header"><h2>Colecciones instaladas</h2><span>{external.length + 1} {external.length ? "colecciones" : "colección"}</span></div>
-        <article className="library-card builtin"><div className="library-icon">{tab === "components" ? "◇" : "▦"}</div><div><h3>Biblioteca estándar de Protohelp</h3><p>Incluida con la aplicación · {builtInCount} {tab === "components" ? "componentes" : "protoboards"}</p><div className="library-tags"><span>Incorporada</span><span>Versión 1.0</span></div></div><span className="enabled-pill">Activa</span></article>
+        <article className="library-card builtin"><div className="library-icon">{tab === "components" ? "◇" : "▦"}</div><div><h3>{defaultManifest.name}</h3><p>{defaultManifest.id} · {builtInCount} {tab === "components" ? "componentes" : "protoboards"}</p><div className="library-tags"><span>Incorporada</span><span>Versión {defaultManifest.version}</span><span>JSON v{defaultManifest.schemaVersion}</span></div></div><span className="enabled-pill">Activa</span></article>
         {external.map(library => <article className={library.enabled ? "library-card" : "library-card disabled"} key={library.id}><div className="library-icon">{tab === "components" ? "◇" : "▦"}</div><div><h3>{library.name}</h3><p title={library.source}>{library.source} · {library.items || "Sin verificar"} elementos</p><div className="library-tags"><span>Externa</span><span>JSON</span></div></div><div className="library-actions"><button onClick={() => persist(libraries.map(item => item.id === library.id ? { ...item, enabled: !item.enabled } : item))}>{library.enabled ? "Desactivar" : "Activar"}</button><button className="danger-link" onClick={() => persist(libraries.filter(item => item.id !== library.id))}>Eliminar</button></div></article>)}
         {!external.length && <div className="library-empty">Todavía no agregaste bibliotecas externas de {tab === "components" ? "componentes" : "protoboards"}.</div>}
       </section>
