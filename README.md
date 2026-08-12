@@ -1,16 +1,35 @@
 # Protohelp
 
-Editor web para diseñar montajes físicos sobre protoboards y calcular la longitud de los puentes antes de cortarlos.
+Diseñá circuitos sobre protoboards, verificá sus conexiones y calculá la longitud de cada puente antes de cortar los cables.
 
-## Estado actual
+## [Abrir Protohelp en el navegador →](https://diejfer.github.io/protohelp/)
 
-- protoboard estándar sobre una matriz configurable;
-- componentes translúcidos, arrastrables y rotables;
-- capa independiente de puentes;
-- cálculo de longitudes y lista de corte;
-- autoguardado en el navegador;
-- importación y exportación de proyectos JSON;
-- interfaz adaptable a escritorio y dispositivos móviles.
+No requiere instalación, cuenta ni servidor. Los proyectos se guardan localmente en el navegador y se pueden importar o exportar como archivos JSON.
+
+## Qué permite hacer
+
+- combinar varios modelos de protoboard en un mismo proyecto;
+- colocar, mover y rotar componentes manteniendo sus pines alineados con los contactos;
+- dibujar puentes manualmente o generarlos mediante autoruteo;
+- consultar la longitud de los cables y obtener una lista de corte;
+- detectar pines, contactos y ubicaciones potencialmente inválidas;
+- alternar entre la vista física y una vista esquemática de las conexiones;
+- ampliar las bibliotecas de componentes y protoboards mediante manifiestos JSON;
+- trabajar sin backend, con autoguardado en `localStorage`.
+
+## Bibliotecas personalizadas
+
+Protohelp incluye bibliotecas predeterminadas, pero cualquier persona puede crear y publicar las suyas usando el mismo formato:
+
+- [Guía para crear componentes](https://diejfer.github.io/protohelp/guides/components/AGENTS.md)
+- [Guía para crear protoboards](https://diejfer.github.io/protohelp/guides/protoboards/AGENTS.md)
+
+Los manifiestos incluidos sirven como ejemplos completos:
+
+- [`src/libraries/default-components.json`](src/libraries/default-components.json)
+- [`src/libraries/default-boards.json`](src/libraries/default-boards.json)
+
+Una biblioteca puede importarse desde un archivo JSON o desde una URL HTTPS con CORS habilitado. Protohelp valida el manifiesto, guarda una copia local e incorpora sus elementos a los selectores del editor.
 
 ## Desarrollo local
 
@@ -21,16 +40,17 @@ npm install
 npm run dev
 ```
 
-La aplicación estará disponible en `http://localhost:5173/protohelp/`.
+La aplicación queda disponible en [http://localhost:5173/protohelp/](http://localhost:5173/protohelp/).
 
-## Crear bibliotecas
+Para generar y verificar la versión de producción:
 
-Las definiciones incorporadas no están codificadas dentro del editor. Son manifiestos JSON normales ubicados en:
+```bash
+npm test
+```
 
-- `src/libraries/default-components.json`
-- `src/libraries/default-boards.json`
+## Formato de las bibliotecas
 
-Para crear una biblioteca, copiá el archivo del tipo correspondiente, asignale un `id` único y modificá `name`, `version` e `items`. El formato raíz es:
+Cada biblioteca es un manifiesto JSON independiente. El campo `kind` debe ser `components` o `boards`:
 
 ```json
 {
@@ -43,12 +63,4 @@ Para crear una biblioteca, copiá el archivo del tipo correspondiente, asignale 
 }
 ```
 
-`kind` debe ser `components` o `boards`. Las coordenadas y dimensiones se expresan como múltiplos del pitch del proyecto. Los tipos completos están documentados en `src/libraries/types.ts`.
-
-La biblioteca puede importarse como archivo JSON desde la pantalla **Bibliotecas** o publicarse en una URL HTTPS con CORS habilitado. Protohelp valida el manifiesto, guarda una copia local y agrega los elementos activos a los selectores del editor.
-
-## Verificación
-
-```bash
-npm run build
-```
+Las coordenadas y dimensiones se expresan en múltiplos del pitch del proyecto. Los tipos completos están definidos en [`src/libraries/types.ts`](src/libraries/types.ts).
