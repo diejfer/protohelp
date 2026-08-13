@@ -23,7 +23,7 @@ type Endpoint = { boardId: string; col: number; row: number };
 type Wire = { id: string; from: Endpoint; to: Endpoint; color: string; points: Point[] };
 type Project = { name: string; pitchX: number; pitchY: number; slackPercent: number; slackMm: number; boards: Board[]; parts: Part[]; wires: Wire[] };
 type Selection = { kind: "board" | "part" | "wire"; id: string } | null;
-type Drag = { kind: "board" | "part"; id: string; dx: number; dy: number } | { kind: "wirePoint"; id: string; index: number };
+type Drag = { kind: "board" | "part"; id: string; dx: number; dy: number } | { kind: "wirePoint"; id: string; index: number } | { kind: "wireEndpoint"; id: string; side: "from" | "to" };
 type ExternalLibrary = { id: string; kind: LibraryKind; name: string; source: string; enabled: boolean; items: number; manifest?: LibraryManifest };
 type SchematicPin = { key: string; partId: string; partLabel: string; pinIndex: number; connected: boolean };
 type SchematicNet = { id: string; pins: SchematicPin[] };
@@ -93,6 +93,19 @@ function boardHasRails(board: Board): boolean { return board.hasRails; }
 function boardHeight(board: Board): number { return boardHasRails(board) ? BOARD_HEIGHT : MINI_BOARD_HEIGHT; }
 function mainRows(board: Board): number[] { return boardHasRails(board) ? MAIN_ROWS : MINI_MAIN_ROWS; }
 function wireRoute(wire: Wire, project: Project): Point[] { return [endpointPoint(project, wire.from), ...wire.points, endpointPoint(project, wire.to)]; }
+function nearestEndpoint(project: Project, point: Point): Endpoint | null {
+  const candidates: Endpoint[] = [];
+  project.boards.forEach(board => {
+    const endpoints = mainRows(board).flatMap(row => Array.from({ length: board.cols }, (_, col) => ({ boardId: board.id, col, row })));
+    if (boardHasRails(board)) RAIL_ROWS.forEach(row => railColumns(board).forEach(col => endpoints.push({ boardId: board.id, col, row })));
+    candidates.push(...endpoints);
+  });
+  const nearest = candidates.map(endpoint => {
+    const position = endpointPoint(project, endpoint);
+    return { endpoint, distance: Math.hypot(position[0] - point[0], position[1] - point[1]) };
+  }).sort((first, second) => first.distance - second.distance)[0];
+  return nearest?.distance <= .85 ? nearest.endpoint : null;
+}
 function wireLength(wire: Wire, project: Project) {
   const route = wireRoute(wire, project);
   const routeMm = route.slice(1).reduce((total, point, index) => total + Math.hypot((point[0] - route[index][0]) * project.pitchX, (point[1] - route[index][1]) * project.pitchY), 0);
@@ -199,9 +212,12 @@ export function ProtohelpEditor() {
   const [selection, setSelection] = useState<Selection>({ kind: "part", id: "led-1" });
   const [pendingEndpoint, setPendingEndpoint] = useState<Endpoint | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [view, setView] = useState<"editor" | "libraries">(() => typeof window !== "undefined" && window.location.hash === "#bibliotecas" ? "libraries" : "editor");
   const fileInput = useRef<HTMLInputElement>(null);
+  const projectRef = useRef(project);
+  const undoHistory = useRef<Project[]>([]);
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(OLD_STORAGE_KEY);
@@ -209,11 +225,19 @@ export function ProtohelpEditor() {
     setReady(true);
   }, []);
   useEffect(() => { if (ready) localStorage.setItem(STORAGE_KEY, JSON.stringify(project)); }, [project, ready]);
+  useEffect(() => { projectRef.current = project; }, [project]);
   useEffect(() => {
     const onHashChange = () => setView(window.location.hash === "#bibliotecas" ? "libraries" : "editor");
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) { event.preventDefault(); undo(); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   const total = useMemo(() => project.wires.reduce((sum, wire) => sum + wireLength(wire, project).cut, 0), [project]);
   const schematicNets = useMemo(() => deriveSchematic(project), [project]);
@@ -224,6 +248,20 @@ export function ProtohelpEditor() {
   const selectedPart = selection?.kind === "part" ? project.parts.find(item => item.id === selection.id) : undefined;
   const selectedWire = selection?.kind === "wire" ? project.wires.find(item => item.id === selection.id) : undefined;
 
+  function remember(projectBeforeChange = projectRef.current) {
+    undoHistory.current = [...undoHistory.current.slice(-99), projectBeforeChange];
+    setCanUndo(true);
+  }
+  function updateProject(updater: (current: Project) => Project) {
+    setProject(current => { const next = updater(current); if (next !== current) remember(current); return next; });
+  }
+  function undo() {
+    const previous = undoHistory.current.at(-1);
+    if (!previous) return;
+    undoHistory.current = undoHistory.current.slice(0, -1);
+    setProject(previous); setCanUndo(undoHistory.current.length > 0); setSelection(null); setDrag(null); setPendingEndpoint(null); setTool("select");
+  }
+
   function worldPoint(svg: SVGSVGElement, clientX: number, clientY: number): Point {
     const point = svg.createSVGPoint(); point.x = clientX; point.y = clientY;
     const local = point.matrixTransform(svg.getScreenCTM()!.inverse());
@@ -233,6 +271,7 @@ export function ProtohelpEditor() {
     if (tool !== "select") return;
     event.stopPropagation();
     const [x, y] = worldPoint(event.currentTarget.ownerSVGElement!, event.clientX, event.clientY);
+    remember();
     setSelection({ kind, id: item.id }); setDrag({ kind, id: item.id, dx: x - item.x, dy: y - item.y });
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -241,6 +280,11 @@ export function ProtohelpEditor() {
     const [rawX, rawY] = worldPoint(event.currentTarget, event.clientX, event.clientY);
     if (drag.kind === "wirePoint") {
       setProject(current => ({ ...current, wires: current.wires.map(wire => wire.id === drag.id ? { ...wire, points: wire.points.map((point, index) => index === drag.index ? [Math.round(rawX), Math.round(rawY)] : point) } : wire) }));
+      return;
+    }
+    if (drag.kind === "wireEndpoint") {
+      const endpoint = nearestEndpoint(projectRef.current, [rawX, rawY]);
+      if (endpoint) setProject(current => ({ ...current, wires: current.wires.map(wire => wire.id === drag.id ? { ...wire, [drag.side]: endpoint } : wire) }));
       return;
     }
     const x = Math.round(rawX - drag.dx), y = Math.round(rawY - drag.dy);
@@ -255,52 +299,52 @@ export function ProtohelpEditor() {
     if (pendingEndpoint.boardId === endpoint.boardId && pendingEndpoint.col === endpoint.col && pendingEndpoint.row === endpoint.row) return;
     const from = endpointPoint(project, pendingEndpoint), to = endpointPoint(project, endpoint);
     const wire: Wire = { id: `wire-${Date.now()}`, from: pendingEndpoint, to: endpoint, color: WIRE_COLORS[project.wires.length % WIRE_COLORS.length], points: [[from[0], to[1]]] };
-    setProject(current => ({ ...current, wires: [...current.wires, wire] }));
+    updateProject(current => ({ ...current, wires: [...current.wires, wire] }));
     setSelection({ kind: "wire", id: wire.id }); setPendingEndpoint(null); setTool("select");
   }
   function addBoard(modelId = "breadboard-830") {
     const board = boardFromModel(modelId, `board-${Date.now()}`, 8 + project.boards.length * 3, 26);
-    setProject(current => ({ ...current, boards: [...current.boards, board] })); setSelection({ kind: "board", id: board.id }); setTool("select");
+    updateProject(current => ({ ...current, boards: [...current.boards, board] })); setSelection({ kind: "board", id: board.id }); setTool("select");
   }
   function changeBoardModel(boardId: string, modelId: string) {
     const model = boardModels.find(item => item.id === modelId);
     if (!model) return;
-    setProject(current => ({ ...current, boards: current.boards.map(board => board.id === boardId ? { ...board, modelId: model.id, label: model.name, cols: model.cols, railCols: model.railCols, railMargin: model.railMargin, hasRails: model.hasRails, color: model.color } : board) }));
+    updateProject(current => ({ ...current, boards: current.boards.map(board => board.id === boardId ? { ...board, modelId: model.id, label: model.name, cols: model.cols, railCols: model.railCols, railMargin: model.railMargin, hasRails: model.hasRails, color: model.color } : board) }));
   }
   function addPart() {
     const part = componentFromModel("led-5mm", `part-${Date.now()}`, 13, 10);
-    setProject(current => ({ ...current, parts: [...current.parts, part] })); setSelection({ kind: "part", id: part.id }); setTool("select");
+    updateProject(current => ({ ...current, parts: [...current.parts, part] })); setSelection({ kind: "part", id: part.id }); setTool("select");
   }
   function changePartModel(partId: string, modelId: string) {
     const model = componentModels.find(item => item.id === modelId);
     if (!model) return;
-    setProject(current => ({ ...current, parts: current.parts.map(part => part.id === partId ? { ...part, modelId: model.id, label: model.label, w: model.w, h: model.h, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, color: model.color, pins: model.pins, pinLabels: model.pinLabels, pinColors: model.pinColors } : part) }));
+    updateProject(current => ({ ...current, parts: current.parts.map(part => part.id === partId ? { ...part, modelId: model.id, label: model.label, w: model.w, h: model.h, bodyOffsetX: model.bodyOffsetX, bodyOffsetY: model.bodyOffsetY, color: model.color, pins: model.pins, pinLabels: model.pinLabels, pinColors: model.pinColors } : part) }));
   }
   function rotateSelected() {
     if (!selection || selection.kind === "wire") return;
-    setProject(current => selection.kind === "board"
+    updateProject(current => selection.kind === "board"
       ? { ...current, boards: current.boards.map(board => board.id === selection.id ? { ...board, rotation: (board.rotation + 90) % 360 } : board) }
       : { ...current, parts: current.parts.map(part => part.id === selection.id ? { ...part, rotation: (part.rotation + 90) % 360 } : part) });
   }
   function removeSelected() {
     if (!selection) return;
-    setProject(current => selection.kind === "board"
+    updateProject(current => selection.kind === "board"
       ? { ...current, boards: current.boards.filter(board => board.id !== selection.id), wires: current.wires.filter(wire => wire.from.boardId !== selection.id && wire.to.boardId !== selection.id) }
       : selection.kind === "part" ? { ...current, parts: current.parts.filter(part => part.id !== selection.id) }
       : { ...current, wires: current.wires.filter(wire => wire.id !== selection.id) });
     setSelection(null);
   }
   function routeWire(id: string) {
-    setProject(current => ({ ...current, wires: current.wires.map(wire => { if (wire.id !== id) return wire; const from = endpointPoint(current, wire.from), to = endpointPoint(current, wire.to); return { ...wire, points: [[from[0], to[1]]] }; }) }));
+    updateProject(current => ({ ...current, wires: current.wires.map(wire => { if (wire.id !== id) return wire; const from = endpointPoint(current, wire.from), to = endpointPoint(current, wire.to); return { ...wire, points: [[from[0], to[1]]] }; }) }));
   }
   function routeAll() {
-    setProject(current => ({ ...current, wires: current.wires.map(wire => { const from = endpointPoint(current, wire.from), to = endpointPoint(current, wire.to); return { ...wire, points: [[from[0], to[1]]] }; }) }));
+    updateProject(current => ({ ...current, wires: current.wires.map(wire => { const from = endpointPoint(current, wire.from), to = endpointPoint(current, wire.to); return { ...wire, points: [[from[0], to[1]]] }; }) }));
   }
   function exportProject() {
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
     const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${project.name.replaceAll(" ", "-").toLowerCase()}.protohelp.json`; link.click(); URL.revokeObjectURL(link.href);
   }
-  function importProject(file?: File) { if (file) file.text().then(text => { try { setProject(normalizeProject(JSON.parse(text))); setSelection(null); } catch { window.alert("No pudimos leer este proyecto."); } }); }
+  function importProject(file?: File) { if (file) file.text().then(text => { try { const imported = normalizeProject(JSON.parse(text)); updateProject(() => imported); setSelection(null); } catch { window.alert("No pudimos leer este proyecto."); } }); }
 
   if (view === "libraries") return <LibraryManager onBack={() => { window.location.hash = ""; setView("editor"); }} />;
 
@@ -309,7 +353,7 @@ export function ProtohelpEditor() {
       <button className="icon-button mobile-menu" onClick={() => setMenuOpen(value => !value)} aria-label="Abrir menú">☰</button>
       <div className="brand"><span className="brand-mark">P</span><span>protohelp</span></div>
       <nav className={menuOpen ? "main-nav open" : "main-nav"}>
-        <button onClick={() => { setProject(initialProject); setSelection({ kind: "board", id: "board-1" }); }}>Nuevo proyecto</button>
+        <button onClick={() => { updateProject(() => initialProject); setSelection({ kind: "board", id: "board-1" }); }}>Nuevo proyecto</button>
         <button onClick={() => fileInput.current?.click()}>Importar</button><button onClick={exportProject}>Exportar</button><button onClick={() => { window.location.hash = "bibliotecas"; setView("libraries"); setMenuOpen(false); }}>Bibliotecas</button>
       </nav>
       <input ref={fileInput} hidden type="file" accept=".json,.protohelp.json" onChange={event => importProject(event.target.files?.[0])} />
@@ -323,6 +367,7 @@ export function ProtohelpEditor() {
         <button disabled={canvasMode === "schematic"} onClick={() => addBoard()} title="Agregar protoboard"><b>▦</b><small>Protoboard</small></button>
         <button disabled={canvasMode === "schematic"} onClick={addPart} title="Agregar componente"><b>◇</b><small>Componente</small></button>
         <button disabled={canvasMode === "schematic"} className={tool === "wire" ? "active" : ""} onClick={() => { setTool("wire"); setPendingEndpoint(null); }} title="Crear puente"><b>⌁</b><small>Puente</small></button>
+        <button onClick={undo} disabled={!canUndo} title="Deshacer último cambio (Ctrl+Z)"><b>↶</b><small>Deshacer</small></button>
         <span />
         <button disabled={canvasMode === "schematic"} onClick={routeAll} title="Autorutear todos"><b>⇢</b><small>Autorutear</small></button>
         <button onClick={removeSelected} disabled={!selection || canvasMode === "schematic"} title="Eliminar selección"><b>⌫</b><small>Eliminar</small></button>
@@ -348,10 +393,10 @@ export function ProtohelpEditor() {
               </g>;
             })}</g>
             <g className="component-layer">{project.parts.map(part => { const anchorX = part.x * GRID, anchorY = part.y * GRID, bodyX = anchorX + part.bodyOffsetX * GRID, bodyY = anchorY + part.bodyOffsetY * GRID, centerX = bodyX + part.w * GRID / 2, centerY = bodyY + part.h * GRID / 2; return <g key={part.id} transform={`rotate(${part.rotation} ${anchorX} ${anchorY})`} onPointerDown={event => beginMove(event, "part", part)} className={`part ${part.pins.length > 20 ? "dense-pins" : ""}`}><rect x={bodyX} y={bodyY} width={part.w * GRID} height={part.h * GRID} rx="5" fill={part.color} fillOpacity=".72" stroke={selection?.kind === "part" && selection.id === part.id ? "#111" : "#5e6866"} strokeWidth={selection?.kind === "part" && selection.id === part.id ? 2.5 : 1.5} /><text x={centerX} y={centerY + 4} textAnchor="middle">{part.label}</text>{part.pins.map((pin, index) => <g key={index}><circle cx={anchorX + pin[0] * GRID} cy={anchorY + pin[1] * GRID} r="4" className="pin" style={{ fill: part.pinColors[index] ?? "#f8faf9" }}><title>{part.pinLabels[index] ?? `Pin ${index + 1}`}</title></circle>{part.pins.length > 8 && <text className="physical-pin-label" x={anchorX + pin[0] * GRID + (pin[0] <= part.w / 2 ? 9 : -9)} y={anchorY + pin[1] * GRID + 3} textAnchor={pin[0] <= part.w / 2 ? "start" : "end"}>{part.pinLabels[index]}</text>}</g>)}</g>; })}</g>
-            <g className="wire-layer">{project.wires.map(wire => { const route = wireRoute(wire, project); const points = route.map(point => `${point[0] * GRID},${point[1] * GRID}`).join(" "); const selected = selection?.kind === "wire" && selection.id === wire.id; return <g key={wire.id}><polyline className="wire-hit" points={points} onPointerDown={event => { event.stopPropagation(); setSelection({ kind: "wire", id: wire.id }); setTool("select"); }} /><polyline className={selected ? "wire selected" : "wire"} points={points} stroke={wire.color} />{selected && wire.points.map((point, index) => <circle key={index} className="route-handle" cx={point[0] * GRID} cy={point[1] * GRID} r="6" onPointerDown={event => { event.stopPropagation(); setDrag({ kind: "wirePoint", id: wire.id, index }); }} />)}</g>; })}</g>
+            <g className="wire-layer">{project.wires.map(wire => { const route = wireRoute(wire, project); const points = route.map(point => `${point[0] * GRID},${point[1] * GRID}`).join(" "); const selected = selection?.kind === "wire" && selection.id === wire.id; const from = route[0], to = route.at(-1)!; return <g key={wire.id}><polyline className="wire-hit" points={points} onPointerDown={event => { event.stopPropagation(); setSelection({ kind: "wire", id: wire.id }); setTool("select"); }} /><polyline className={selected ? "wire selected" : "wire"} points={points} stroke={wire.color} />{selected && <><circle className="endpoint-handle" cx={from[0] * GRID} cy={from[1] * GRID} r="7" onPointerDown={event => { event.stopPropagation(); remember(); setDrag({ kind: "wireEndpoint", id: wire.id, side: "from" }); }} /><circle className="endpoint-handle" cx={to[0] * GRID} cy={to[1] * GRID} r="7" onPointerDown={event => { event.stopPropagation(); remember(); setDrag({ kind: "wireEndpoint", id: wire.id, side: "to" }); }} />{wire.points.map((point, index) => <circle key={index} className="route-handle" cx={point[0] * GRID} cy={point[1] * GRID} r="6" onPointerDown={event => { event.stopPropagation(); remember(); setDrag({ kind: "wirePoint", id: wire.id, index }); }} />)}</>}</g>; })}</g>
           </g>
         </svg> : <SchematicCanvas project={project} nets={schematicNets} zoom={zoom} />}
-        <div className="canvas-hint">{canvasMode === "schematic" ? "Vista lógica derivada automáticamente del montaje físico" : tool === "wire" ? "Hacé clic en dos agujeros para crear el puente" : "Seleccioná un elemento para editarlo · Arrastrá los nodos de un puente para cambiar su recorrido"}</div>
+        <div className="canvas-hint">{canvasMode === "schematic" ? "Vista lógica derivada automáticamente del montaje físico" : tool === "wire" ? "Hacé clic en dos agujeros para crear el puente" : "Seleccioná un puente y arrastrá sus extremos verdes para cambiar los agujeros · Ctrl+Z para deshacer"}</div>
       </div>
 
       <aside className="inspector">
@@ -360,8 +405,8 @@ export function ProtohelpEditor() {
         <section className="selection-panel"><div className="section-title"><span>Selección</span><small>{selection ? selection.kind === "board" ? "Protoboard" : selection.kind === "part" ? "Componente" : "Puente" : "Nada seleccionado"}</small></div>
           {!selection && <p className="empty-copy">Seleccioná un elemento en el lienzo para moverlo, rotarlo o eliminarlo.</p>}
           {selectedBoard && <><label>Modelo<select value={selectedBoard.modelId} onChange={event => changeBoardModel(selectedBoard.id, event.target.value)}>{boardModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><div className="component-meta"><span>{selectedBoard.cols * 10 + selectedBoard.railCols * 4} puntos</span><span>{selectedBoard.cols} columnas centrales</span><span>{boardHasRails(selectedBoard) ? `4 rieles × ${selectedBoard.railCols}` : "Sin rieles de alimentación"}</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
-          {selectedPart && <><label>Componente de la biblioteca<select value={selectedPart.modelId} onChange={event => changePartModel(selectedPart.id, event.target.value)}>{componentModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><label className="spaced-field">Etiqueta de esta instancia<input value={selectedPart.label} onChange={event => setProject(current => ({ ...current, parts: current.parts.map(part => part.id === selectedPart.id ? { ...part, label: event.target.value } : part) }))} /></label><div className="component-meta"><span>{selectedPart.w} × {selectedPart.h} pitches</span><span>{selectedPart.pins.length} pines</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
-          {selectedWire && <><label>Color<input className="color-input" type="color" value={selectedWire.color} onChange={event => setProject(current => ({ ...current, wires: current.wires.map(wire => wire.id === selectedWire.id ? { ...wire, color: event.target.value } : wire) }))} /></label><p className="empty-copy">Arrastrá los puntos blancos del puente para ajustar el recorrido.</p><div className="edit-actions"><button onClick={() => routeWire(selectedWire.id)}>⇢ Autorutear</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
+          {selectedPart && <><label>Componente de la biblioteca<select value={selectedPart.modelId} onChange={event => changePartModel(selectedPart.id, event.target.value)}>{componentModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><label className="spaced-field">Etiqueta de esta instancia<input value={selectedPart.label} onChange={event => updateProject(current => ({ ...current, parts: current.parts.map(part => part.id === selectedPart.id ? { ...part, label: event.target.value } : part) }))} /></label><div className="component-meta"><span>{selectedPart.w} × {selectedPart.h} pitches</span><span>{selectedPart.pins.length} pines</span></div><div className="edit-actions"><button onClick={rotateSelected}>↻ Rotar 90°</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
+          {selectedWire && <><label>Color<input className="color-input" type="color" value={selectedWire.color} onChange={event => updateProject(current => ({ ...current, wires: current.wires.map(wire => wire.id === selectedWire.id ? { ...wire, color: event.target.value } : wire) }))} /></label><p className="empty-copy">Arrastrá los extremos verdes para cambiar los agujeros conectados. Los puntos blancos ajustan el recorrido.</p><div className="edit-actions"><button onClick={() => routeWire(selectedWire.id)}>⇢ Autorutear</button><button className="danger" onClick={removeSelected}>Eliminar</button></div></>}
         </section>
         <section><div className="section-title"><span>Capas del montaje</span><small>Seleccionables</small></div><button className="layer-row" onClick={() => project.boards[0] && setSelection({ kind: "board", id: project.boards[0].id })}><b>▦</b><span>Protoboards<small>{project.boards.length} elementos</small></span></button><button className="layer-row" onClick={() => project.parts[0] && setSelection({ kind: "part", id: project.parts[0].id })}><b>◇</b><span>Componentes<small>{project.parts.length} elementos</small></span></button><button className="layer-row" onClick={() => project.wires[0] && setSelection({ kind: "wire", id: project.wires[0].id })}><b>⌁</b><span>Puentes<small>{project.wires.length} elementos</small></span></button></section>
         <section className="wire-summary"><div className="section-title"><span>Lista de corte</span><small>{project.wires.length} cables</small></div>{project.wires.map((wire, index) => { const length = wireLength(wire, project); return <button className="wire-row" key={wire.id} onClick={() => setSelection({ kind: "wire", id: wire.id })}><i style={{ background: wire.color }} /><span>Puente {index + 1}<small>{length.exact.toFixed(1)} mm exactos</small></span><strong>{length.cut.toFixed(2)} mm<small>{(length.cut / 25.4).toFixed(1)}″</small></strong></button>; })}<div className="total-row"><span>Total para cortar</span><strong>{total.toFixed(1)} mm</strong></div></section>

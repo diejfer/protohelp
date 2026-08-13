@@ -71,6 +71,9 @@ kbd { padding:1px 5px; border-radius:3px; background:#ffffff20; }
 .wire-hit { stroke:transparent; stroke-width:15; cursor:pointer; pointer-events:stroke; }
 .wire.selected { stroke-width:6; filter:drop-shadow(0 1px 2px #0004); }
 .route-handle { fill:#fff; stroke:#182322; stroke-width:2; cursor:move; }
+.endpoint-handle { fill:#dcfce7; stroke:#15803d; stroke-width:2.5; cursor:grab; filter:drop-shadow(0 1px 2px #0003); }
+.endpoint-handle:hover { fill:#86efac; stroke-width:3; }
+.endpoint-handle:active { cursor:grabbing; }
 .inspector { overflow:auto; background:#fff; border-left:1px solid var(--line); }
 .inspector section { padding:18px; border-bottom:1px solid var(--line); }
 .section-title { display:flex; justify-content:space-between; align-items:center; margin-bottom:13px; font-size:12px; font-weight:750; }

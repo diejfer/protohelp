@@ -11,6 +11,8 @@ No requiere instalación, cuenta ni servidor. Los proyectos se guardan localment
 - combinar varios modelos de protoboard en un mismo proyecto;
 - colocar, mover y rotar componentes manteniendo sus pines alineados con los contactos;
 - dibujar puentes manualmente o generarlos mediante autoruteo;
+- mover los extremos de cada puente entre agujeros sin volver a crearlo;
+- deshacer el último cambio con el botón del editor o con `Ctrl+Z`;
 - consultar la longitud de los cables y obtener una lista de corte;
 - detectar pines, contactos y ubicaciones potencialmente inválidas;
 - alternar entre la vista física y una vista esquemática de las conexiones;
